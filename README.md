@@ -818,15 +818,125 @@ O ``case`` dentro do processo é o coração desta unidade. Cada ``when`` corres
 - **``when "10" (B)``**: O imediato para desvios (branches) tem seus 12 bits (+ 1 bit zero implícito) espalhados pela instrução para otimizar a decodificação. Esta linha executa uma operação de reembaralhamento de pinos, pegando fatias de diferentes partes da entrada ``imm``, montando-as na ordem correta, adicionando o ``'0'`` no final (pois os alvos de desvio são sempre alinhados a 2 bytes) e, finalmente, estendendo o bit de sinal.
 
 - **``when "11" (J)``**: Similar ao formato B, o imediato para saltos (jumps) de 20 bits (+ 1 zero implícito) também está espalhado. A lógica aqui é ainda mais complexa, selecionando os bits ``imm(12 downto 5)``, ``imm(13)`` e ``imm(23 downto 14)`` para reconstruir o valor do desvio, adicionando o ``'0'`` no final e realizando a extensão de sinal.
+___
 ### 3\. Execução (Execute - EX)
 
 A fase de execução é onde a computação principal da instrução ocorre. A Unidade Lógica e Aritmética (ULA) realiza a operação matemática ou lógica necessária.
 
-#### Componentes de Código Envolvidos:
+### Componentes de Código Envolvidos:
 
-  * **`alu.vhd`**: A Unidade Lógica e Aritmética. Recebe os operandos (um do banco de registradores e outro que pode ser de um registrador ou o imediato estendido) e realiza a operação determinada pelo sinal `aluControl`. Ela gera o resultado e um sinal `zero`, usado para desvios condicionais.
-  * **`mux232.vhd`**: Um multiplexador no `design.vhd` (`alu_operand2 <= ...`) seleciona o segundo operando para a ULA. A decisão é baseada no sinal `aluSrc` do controlador.
+#### **`alu.vhd`**: 
+A Unidade Lógica e Aritmética. Recebe os operandos (um do banco de registradores e outro que pode ser de um registrador ou o imediato estendido) e realiza a operação determinada pelo sinal `aluControl`. Ela gera o resultado e um sinal `zero`, usado para desvios condicionais.
 
+```vhdl
+entity alu is
+    port(
+        -- entradas: operandos a e b de 32 bits
+        a, b       : in  std_logic_vector(31 downto 0);
+
+        -- entrada: sinal de controle que define a operacao
+        aluControl : in  std_logic_vector(2 downto 0);
+
+        -- saida: resultado da operacao em 32 bits
+        result     : out std_logic_vector(31 downto 0);
+
+        -- saida: flag que indica se o resultado eh zero
+        zero       : out std_logic
+    );
+end entity alu;
+```
+- **``a, b``**: As duas entradas de operandos de 32 bits. Na arquitetura do processador, o operando a sempre vem do primeiro registrador fonte (``rs1``). O operando b pode vir tanto do segundo registrador fonte (``rs2``) quanto do valor imediato estendido, dependendo do sinal de controle ``aluSrc``.
+
+- **``aluControl``**: O sinal de controle de 3 bits que comanda a ULA. Este sinal vem diretamente do ``controller`` e diz à ULA qual operação executar. A codificação que eu irei utilizar é:
+
+    - ``"000"``: adição (``a + b``)
+
+    - ``"001"``: subtração (``a - b``)
+
+    - ``"010"``: AND (``a and b``)
+
+    - ``"011"``: OR (``a or b``)
+
+    - ``"100"``: XOR (``a xor b``)
+
+    - ``"101"``: SLT (Set on Less Than)
+
+- **``result``**: A saída principal de 32 bits que contém o resultado da operação executada. Este valor pode ser um resultado aritmético, o endereço de um acesso à memória ou o resultado de uma comparação.
+
+- **``zero``**: Uma flag de estado de 1 bit. Esta saída é importante para o controle de fluxo. Ela é definida como ``'1'`` se o ``result`` da operação for exatamente zero (todos os 32 bits são ``'0'``), e ``'0'`` em qualquer outro caso. A unidade de controle (``controller``) usa esta flag para tomar decisões em instruções de desvio condicional como ``beq`` (desvie se igual) e ``bne`` (desvie se não igual).
+
+```vhdl
+architecture behavior of alu is
+    -- sinal interno para armazenar o resultado temporariamente
+    signal res_s : std_logic_vector(31 downto 0);
+    
+begin
+    -- processo combinacional sensivel as entradas de operandos e de controle
+    process(a, b, aluControl)
+    begin
+        -- seleciona a operacao a ser executada com base no sinal de controle
+        case aluControl is
+            -- adicao
+            when "000" => 
+                res_s <= std_logic_vector(unsigned(a) + unsigned(b));
+            -- subtracao
+            when "001" =>
+                res_s <= std_logic_vector(unsigned(a) - unsigned(b));
+            -- operacao logica and bit a bit
+            when "010" =>
+                res_s <= a and b;
+            -- operacao logica or bit a bit
+            when "011" =>
+                res_s <= a or b;
+            -- operacao logica xor bit a bit
+            when "100" =>
+                res_s <= a xor b;
+            -- comparacao 'set on less than' com sinal
+            when "101" =>
+                -- se 'a' for menor que 'b' (interpretados como numeros com sinal)
+                if signed(a) < signed(b) then
+                    -- o resultado eh 1 (em 32 bits)
+                    res_s <= std_logic_vector(to_unsigned(1, 32));
+                else
+                    -- o resultado eh 0
+                    res_s <= (others => '0');
+                end if;
+            -- para qualquer codigo de controle desconhecido
+            when others =>
+                -- a saida eh 'x' (indefinido) para indicar um erro
+                res_s <= (others => 'X');
+        end case;
+    end process;
+
+    -- atribui o resultado do sinal interno a porta de saida principal
+    result <= res_s;
+
+    -- gera a flag 'zero': sera '1' se o resultado for 0, e '0' caso contrario
+    zero <= '1' when unsigned(res_s) = 0 else '0';
+
+end architecture behavior;
+```
+O comportamento da ULA é centrado em um process combinacional sensível às entradas ``a``, ``b`` e ``aluControl``. Qualquer mudança em um desses sinais fará com que o processo seja reavaliado.
+
+- **``case aluControl is``**: Esta estrutura funciona como um grande seletor que direciona a ULA para a lógica que ela deve seguir.
+
+    - **Operações Aritméticas (``"000"`` e ``"001"``)**: Para ADD e SUB, os vetores a e b são primeiro convertidos para o tipo numérico ``unsigned`` para que a operação aritmética possa ser realizada. O resultado é então convertido de volta para ``std_logic_vector``.
+
+    - **Operações Lógicas (``"010"``, ``"011"``, ``"100"``)**: Para AND, OR e XOR, não é necessária nenhuma conversão de tipo, pois esses operadores funcionam diretamente bit a bit nos vetores ``std_logic_vector``.
+
+    - **Operação de Comparação (``"101"``, SLT)**: Este é um caso especial. Para comparar "menor que" corretamente para números negativos, os operandos são convertidos para o tipo ``signed``. Se a condição ``signed(a) < signed(b)`` for verdadeira, o resultado é o número ``1`` (em 32 bits). Caso contrário, o resultado é ``0``.
+
+    - **Default (`when others`)**: Se um código de controle inválido for recebido, a saída é definida como 'X' (Don't Care).
+
+- **Atribuições Concorrentes Finais**
+    - ``result <= res_s;``: Esta linha simplesmente conecta o sinal interno ``res_s``, que guarda o resultado do processo, à porta de saída principal ``result``.
+
+    - ``zero <= '1' when ...``: Esta é uma atribuição de sinal condicional. Ela descreve um circuito que continuamente verifica se o valor numérico de ``res_s`` é ``zero``. Se todos os 32 bits de ``res_s`` forem ``'0'``, a saída ``zero`` se torna ``'1'``. Caso contrário, ``zero`` se torna ``'0'``.
+___ 
+#### **`mux232.vhd`**: 
+Um multiplexador no `design.vhd` (`alu_operand2 <= ...`) seleciona o segundo operando para a ULA. A decisão é baseada no sinal `aluSrc` do controlador.
+
+___
 ### 4\. Acesso à Memória (Memory - MEM)
 
 Esta fase é responsável por interagir com a memória de dados. Ela é utilizada apenas por instruções de carga (`lw`) e armazenamento (`sw`).
