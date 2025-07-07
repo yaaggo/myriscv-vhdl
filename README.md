@@ -614,8 +614,136 @@ Este segundo processo tem como sua única função gerar o sinal final ``aluCont
     - Para o caso especial de ``funct3 = "000"``, ele precisa diferenciar entre ``add/addi`` e ``sub``. A lógica ``if RtypeSub = '1'`` (que usa o ``funct7``) faz essa distinção final.
 ___
 #### **`registers.vhd`**:
-O banco de registradores. Usa os campos `rs1` e `rs2` como endereços para ler os valores dos operandos, que são disponibilizados em suas saídas `rd1` e `rd2`.
+A entidade ``registers`` modela o banco de registradores do processador. Este componente é uma memória rápida e pequena, interna à CPU, que armazena os dados de trabalho do programa. Uma característica fundamental neste design é a capacidade de **realizar duas leituras e uma escrita simultaneamente no mesmo ciclo de clock**, sendo essencial para a execução eficiente de instruções que usam três operandos (dois fontes e um destino), como ``add rd, rs1, rs2``.
+
+```vhdl
+entity registers is
+    port (
+        clk: in  std_logic;                     -- entrada: sinal de clock do sistema
+        rst: in  std_logic;                     -- entrada: sinal de reset
+        we : in  std_logic;                     -- entrada: habilitacao de escrita (write enable)
+        a1 : in  std_logic_vector(4 downto 0);  -- entrada: endereco do primeiro registrador para leitura (rs1)
+        a2 : in  std_logic_vector(4 downto 0);  -- entrada: endereco do segundo registrador para leitura (rs2)
+        a3 : in  std_logic_vector(4 downto 0);  -- entrada: endereco do registrador para escrita (rd)
+        wd : in  std_logic_vector(31 downto 0); -- entrada: dado de 32 bits a ser escrito (write data)
+        rd1: out std_logic_vector(31 downto 0); -- saida: dado lido do primeiro registrador (read data 1)
+        rd2: out std_logic_vector(31 downto 0)  -- saida: dado lido do segundo registrador (read data 2)
+    );
+end entity registers;
+```
+
+- **``clk``**: O sinal de clock. A operação de escrita no banco de registradores é síncrona, ocorrendo apenas na borda de subida do clock.
+
+- **``rst``**: O sinal de reset. Quando ativado, ele inicializa todos os 32 registradores para um valor conhecido (geralmente zero).
+
+- **``we``**: A porta **Write Enable**. Este é um sinal de controle vindo do ``controller``. A escrita de dados só acontece se ``we`` estiver em ``'1'``. Isso garante que as instruções que não devem alterar registradores (como ``sw`` ou ``beq``) não o façam.
+
+- **``a1``**: O endereço de 5 bits para a primeira porta de leitura. Ele especifica qual dos 32 registradores (``2^5 = 32``) será lido e enviado para a saída ``rd1``. Geralmente conectado ao campo ``rs1`` da instrução.
+
+- **``a2``**: O endereço de 5 bits para a segunda porta de leitura, conectado ao campo ``rs2`` da instrução.
+
+- **``a3``**: O endereço de 5 bits para a porta de escrita. Ele especifica em qual registrador o dado de entrada ``wd`` será armazenado. Geralmente conectado ao campo ``rd`` da instrução.
+
+- **``wd``**: A porta **Write Data**. Contém o valor de 32 bits que será escrito no registrador endereçado por ``a3``.
+
+- **``rd1``**: A primeira porta de saída de dados. Ela expõe o conteúdo do registrador endereçado por ``a1``. A leitura é uma operação combinacional, ou seja, a saída ``rd1`` reflete o conteúdo do registrador ``a1`` "instantaneamente".
+
+- **``rd2``**: A segunda porta de saída de dados, que expõe o conteúdo do registrador endereçado por ``a2`` de forma combinacional.
+
+
+```vhdl
+architecture behavioral of registers is
+    -- define um novo tipo: um array de 32 vetores de 32 bits para a memoria
+    type reg_array_t is array (0 to 31) of std_logic_vector(31 downto 0);
+    
+    -- declara o sinal que representa o banco de registradores fisico e o zera
+    signal regs : reg_array_t := (others => (others => '0'));
+    
+begin
+    -- processo 1: escrita Sincrona no Banco de Registradores
+    write_proc: process(clk, rst)
+    begin
+        -- se o reset esta ativo (assincrono)
+        if rst = '1' then
+            -- zera todos os 32 registradores um por um
+            for i in 0 to 31 loop
+                regs(i) <= (others => '0');
+            end loop;
+        -- senao, na borda de subida do clock
+        elsif rising_edge(clk) then
+            -- se a escrita esta habilitada e os sinais sao validos...
+            if we = '1' and not is_x(a3) and not is_x(wd) then
+                -- ... e o registrador de destino nao eh o x0 (que eh sempre zero)
+                if to_integer(unsigned(a3)) /= 0 then
+                    -- escreve o dado 'wd' no registrador enderecado por 'a3'
+                    regs(to_integer(unsigned(a3))) <= wd;
+                end if;
+            end if;
+        end if;
+    end process write_proc;
+
+    -- processo 2: primeira Porta de Leitura (Combinacional)
+    process(a1, regs)
+    begin
+        -- se o endereco de leitura for desconhecido, a saida eh zero
+        if is_x(a1) then
+            rd1 <= (others => '0');
+        else
+            -- le o conteudo do registrador 'a1' e o envia para a saida rd1
+            rd1 <= regs(to_integer(unsigned(a1)));
+        end if;
+    end process;
+    
+    -- processo 3: segunda Porta de Leitura (Combinacional)
+    process(a2, regs)
+    begin
+        -- se o endereco de leitura for desconhecido, a saida eh zero
+        if is_x(a2) then
+            rd2 <= (others => '0');
+        else
+            -- le o conteudo do registrador 'a2' e o envia para a saida rd2
+            rd2 <= regs(to_integer(unsigned(a2)));
+        end if;
+    end process;
+
+end architecture behavioral;
+```
+##### 1. Declarações Iniciais
+- **``type reg_array_t``**: é definido um tipo de dado personalizado que representa um array de 32 elementos, onde cada elemento é um vetor de 32 bits. Esta é a estrutura de dados que servirá como nosso banco de registradores.
+
+- **``signal regs``**: Em seguida, um sinal chamado regs é declarado usando este novo tipo. Este sinal é a representação física do banco de registradores e é inicializado com todos os bits em '0'.
+
+##### 2. Processo de Escrita (write_proc)
+Este é o único processo sequencial do componente. Ele controla como e quando os dados são escritos nos registradores.
+
+- **Reset**: A lógica de reset é assíncrona. Se ``rst`` for ``'1'``, um laço ``for`` percorre todos os 32 registradores e os zera, garantindo um estado inicial limpo.
+
+- **Escrita Síncrona**: Se não houver reset, a escrita só pode ocorrer na borda de subida do clock (``rising_edge(clk)``).
+
+- **Condições de Escrita**: Antes de escrever, duas condições são verificadas:
+
+    1. O sinal de habilitação de escrita ``we`` deve ser ``'1'``.
+
+    2. O endereço de destino ``a3`` não pode ser o registrador zero (``to_integer(unsigned(a3)) /= 0``). 
+
+- Se todas as condições forem atendidas, o dado ``wd`` é escrito no registrador especificado por ``a3``.
+
+##### 3. Processos de Leitura (para ``rd1`` e ``rd2``)
+Estes dois processos são combinacionais e tem lógicas iguais, um para cada porta de leitura.
+
+- **Leitura Concorrente**: Como são processos separados, eles podem "executar" ao mesmo tempo, o que modela a capacidade do hardware de ler de duas localizações diferentes simultaneamente.
+
+- **Lógica de Leitura**: A lógica é direta:
+
+    1. O endereço de leitura (``a1`` ou ``a2``) é convertido para um inteiro.
+
+    2. Esse inteiro é usado como índice para acessar o array ``regs``.
+
+    3. O valor de 32 bits lido do array é imediatamente enviado para a porta de saída correspondente (``rd1`` ou ``rd2``).
+
+- **Sensibilidade**: Como a saída depende apenas do endereço de entrada e do conteúdo do regs, a leitura é assíncrona. Qualquer mudança no endereço de leitura (a1 ou a2) resultará em uma atualização imediata na saída de dados.
 ___
+
 #### **`extend.vhd`**:
 A unidade de extensão de sinal. Recebe o campo de imediato (`imm`) da instrução e o estende para 32 bits, de acordo com o formato da instrução (I, S, B ou J), determinado pelo sinal `immSrc` do controlador.
 
