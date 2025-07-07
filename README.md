@@ -388,7 +388,230 @@ Em resumo, a entidade decode não processa informação. Ela simplesmente a orga
 
 ___
 #### **`controller.vhd`**: 
-A unidade de controle. Ela recebe os campos `opcode`, `funct3` e `funct7` e gera todos os sinais de controle necessários para o resto do processador (`regWrite`, `memWrite`, `aluSrc`, `aluControl`, `PCSrc`, etc.).
+A entidade ``controller`` é cérebro do processador. Trata-se de um bloco combinacional que funciona como o "maestro" do hardware. Sua função é receber os campos decodificados da instrução (``opcode``, ``funct3``, ``funct7``) e o estado atual do processador (como a flag zero da ULA) e, com base neles, gerar todos os sinais de controle que ditam o comportamento do caminho de dados para executar aquela instrução específica.
+
+```vhdl
+entity controller is
+    port(
+        -- entradas que definem a instrucao e o estado
+        op        : in  std_logic_vector(6 downto 0);  -- entrada: campo opcode da instrucao
+        funct3    : in  std_logic_vector(2 downto 0);  -- entrada: campo funct3 da instrucao
+        funct7    : in  std_logic_vector(6 downto 0);  -- entrada: campo funct7 da instrucao
+        zero      : in  std_logic;                     -- entrada: flag 'zero' vinda da ula
+
+        -- saidas: sinais de controle para o caminho de dados
+        resultSrc : out std_logic_vector(1 downto 0);  -- saida: seleciona a fonte do dado para escrita
+        memWrite  : out std_logic;                     -- saida: habilita a escrita na memoria de dados
+        PCSrc     : out std_logic;                     -- saida: seleciona a fonte do proximo pc
+        aluSrc    : out std_logic;                     -- saida: seleciona a segunda fonte de operando para a ula
+        regWrite  : out std_logic;                     -- saida: habilita a escrita no banco de registradores
+        immSrc    : out std_logic_vector(1 downto 0);  -- saida: seleciona o tipo do imediato para a unidade de extensao
+        aluControl: out std_logic_vector(2 downto 0);  -- saida: define a operacao da ula
+        TargetSrc : out std_logic                      -- saida: seleciona a fonte do endereco de destino para saltos
+    );
+end entity controller;
+```
+- **``op, funct3, funct7``**: Estes três campos, vindos diretamente do decodificador decode, definem unicamente a instrução a ser executada. O ``controller`` usa uma combinação desses valores para determinar todos os outros sinais de controle.
+- **``zero``**: Esta entrada de 1 bit é uma flag de estado vinda da ULA. Ela é ``'1'`` se o resultado da última operação da ULA foi zero. Seu uso principal é para instruções de desvio condicional como beq, que só desvia se a subtração dos dois operandos resultar em zero.
+
+- **``resultSrc``**: Controla um multiplexador que decide qual resultado será escrito de volta no banco de registradores. As fontes podem ser: o resultado da ULA, o dado lido da memória de dados (``ram``), ou o endereço ``PC + 4`` (para instruções de salto e link).
+
+- **``memWrite``**: Um sinal de habilitação. Quando ``'1'``, permite a escrita na memória de dados (``ram``). Ativado apenas para instruções de armazenamento (``sw``).
+
+- **``PCSrc``**: Controla o multiplexador que seleciona o próximo endereço para o Program Counter (``PC``). Se ``'0'``, o PC recebe ``PC + 4``. Se ``'1'``, ele recebe o endereço de destino de um desvio ou salto.
+
+- **``aluSrc``**: Controla o multiplexador na segunda entrada da ULA. Se ``'0'``, a ULA recebe o valor do segundo registrador fonte (``rs2``). Se ``'1'``, ela recebe o valor imediato de 32 bits já com a extensão de sinal.
+
+- **``regWrite``**: Outro sinal de habilitação. Quando ``'1'``, permite que o resultado seja escrito no banco de registradores. É desativado para instruções que não geram resultados a serem salvos, como ``sw`` e desvios.
+
+- **``immSrc``**: Controla a unidade extend. Este sinal informa qual formato de imediato (``I``, ``S``, ``B`` ou ``J``) deve ser usado para interpretar e estender o valor imediato da instrução.
+
+- **``aluControl``**: Um vetor de 3 bits que comanda diretamente a ULA, dizendo qual operação ela deve realizar (soma, subtração, AND, OR, etc.).
+
+- **``TargetSrc``**: Um sinal de controle mais específico para saltos. Ele seleciona a fonte do endereço de destino para o PC, diferenciando entre um alvo calculado com base no PC (para ``jal``) e um alvo calculado com base em um registrador (para ``jalr``).
+
+
+```vhdl
+architecture behavior of controller is
+    -- sinais internos para comunicacao entre os processos de decodificacao
+    signal aluOp    : std_logic_vector(1 downto 0); -- sinal de controle interno para o decodificador da alu
+    signal branch   : std_logic;                    -- sinal que indica uma instrucao de branch
+    signal jump     : std_logic;                    -- sinal que indica uma instrucao de jump
+    signal bne      : std_logic;                    -- sinal que indica uma instrucao 'branch on not equal'
+    signal beq      : std_logic;                    -- sinal que indica uma instrucao 'branch on equal'
+    signal RtypeSub : std_logic;                    -- sinal para diferenciar entre add e sub no tipo-r
+
+begin
+    -- logica concorrente para o sinal de controle do pc (PCSrc)
+    PCSrc <= (zero and beq) or ((not zero) and bne) or jump;
+
+
+    -- processo 1: decodificador principal
+    -- gera a maioria dos sinais de controle com base no opcode da instrucao
+    mainDecoder: process(op, funct3)
+    begin
+        -- valores padrao (inativos) para os sinais de controle
+        branch    <= '0';
+        jump      <= '0';
+        beq       <= '0';
+        bne       <= '0';
+        resultSrc <= "XX"; -- "don't care"
+        memWrite  <= '0';
+        aluSrc    <= 'X';  -- "don't care"
+        regWrite  <= '0';
+        immSrc    <= "XX"; -- "don't care"
+        aluOp     <= "XX"; -- "don't care"
+        TargetSrc <= '0';
+
+        -- decodifica a instrucao com base no opcode
+        case op is
+            -- instrucao lw (load word)
+            when "0000011" =>
+                resultSrc <= "01"; -- resultado vem da memoria
+                aluSrc    <= '1';  -- ula usa imediato
+                regWrite  <= '1';  -- habilita escrita no registrador
+                immSrc    <= "00"; -- imediato tipo i
+                aluOp     <= "00"; -- ula deve somar
+
+            -- instrucao sw (store word)
+            when "0100011" =>
+                memWrite <= '1';  -- habilita escrita na memoria
+                aluSrc   <= '1';  -- ula usa imediato
+                immSrc   <= "01"; -- imediato tipo s
+                aluOp    <= "00"; -- ula deve somar
+
+            -- instrucoes tipo-r (add, sub, etc.)
+            when "0110011" =>
+                resultSrc <= "00"; -- resultado vem da ula
+                aluSrc    <= '0';  -- ula usa outro registrador
+                regWrite  <= '1';  -- habilita escrita no registrador
+                aluOp     <= "10"; -- operacao da ula eh definida pelo aludecoder
+
+            -- instrucoes branch (beq, bne)
+            when "1100011" =>
+                branch <= '1';
+                if funct3 = "000" then -- beq
+                    beq <= '1';
+                else -- bne
+                    bne <= '1';
+                end if;
+                aluSrc <= '0';
+                immSrc <= "10"; -- imediato tipo b
+                aluOp  <= "01"; -- ula deve subtrair
+
+            -- instrucoes tipo-i (addi, etc.)
+            when "0010011" =>
+                resultSrc <= "00"; -- resultado vem da ula
+                aluSrc    <= '1';  -- ula usa imediato
+                regWrite  <= '1';  -- habilita escrita no registrador
+                immSrc    <= "00"; -- imediato tipo i
+                aluOp     <= "10"; -- operacao da ula eh definida pelo aludecoder
+
+            -- instrucao jal (jump and link)
+            when "1101111" =>
+                jump      <= '1';
+                resultSrc <= "10"; -- resultado eh pc + 4
+                regWrite  <= '1';
+                immSrc    <= "11"; -- imediato tipo j
+                
+            -- instrucao jalr
+            when "1100111" =>
+                jump      <= '1';
+                TargetSrc <= '1';  -- endereco de destino vem da ula
+                resultSrc <= "10"; -- resultado eh pc + 4
+                regWrite  <= '1';
+                immSrc    <= "00"; -- imediato tipo i
+                aluOp     <= "00"; -- ula deve somar
+
+            when others =>
+                null; -- nao faz nada para opcodes desconhecidos
+        end case;
+    end process mainDecoder;
+
+
+    -- processo 2: fecodificador da ULA
+    -- gera o sinal aluControl final com base no aluOp, funct3 e funct7
+    aluDecoder: process (op, funct3, funct7, aluOp)
+    begin
+        -- logica para detectar a instrucao sub do tipo-r
+        RtypeSub <= funct7(5) and op(5);
+
+        case aluOp is
+            -- caso 1: adicao para lw, sw, jalr
+            when "00" =>
+                aluControl <= "000"; -- add
+
+            -- caso 2: subtracao para beq, bne
+            when "01" =>
+                aluControl <= "001"; -- sub
+
+            -- caso 3: operacao depende de funct3 (para tipo-r e tipo-i)
+            when "10" =>
+                case funct3 is
+                    when "000" => -- add, addi, sub
+                        if RtypeSub = '1' then
+                            aluControl <= "001"; -- sub
+                        else
+                            aluControl <= "000"; -- add ou addi
+                        end if;
+                    when "010" => -- slt, slti
+                        aluControl <= "101";
+                    when "100" => -- xor, xori
+                        aluControl <= "100";
+                    when "110" => -- or, ori
+                        aluControl <= "011";
+                    when "111" => -- and, andi
+                        aluControl <= "010";
+                    when others =>
+                        aluControl <= "---"; -- desconhecido
+                end case;
+
+            when others =>
+                aluControl <= "---"; -- desconhecido
+        end case;
+    end process aluDecoder;
+end architecture behavior;
+```
+
+##### 1. Lógica Concorrente para PCSrc
+
+A linha ``PCSrc <= (zero and beq) or ((not zero) and bne) or jump;`` é uma atribuição que executa continuamente. Ela define a lógica de desvio e salto:
+
+- O sinal ``PCSrc`` será ``'1'`` (indicando um desvio/salto) se:
+
+    - A instrução for um ``beq`` **E** a flag ``zero`` da ULA for ``'1'``.
+
+    - **OU** a instrução for um ``bne`` **E** a flag ``zero`` for ``'0'``.
+
+    - **OU** a instrução for um ``jal`` ou ``jalr`` (sinal ``jump`` é ``'1'``).
+
+- Caso contrário, ``PCSrc`` será ``'0'``, indicando execução sequencial (``PC + 4``).
+
+##### 2. Processo mainDecoder
+Este processo olha para o ``opcode`` da instrução e, através de um grande ``case``, define a maioria dos sinais de controle.
+
+- **Valores Padrão**: No início do processo, todos os sinais são definidos para um estado "inativo" ou "não importa" (``'0'`` ou ``'X'``). Isso garante que, para qualquer instrução, os sinais que não são explicitamente ativados permaneçam desativados.
+
+- **Decodificação por opcode:** Cada ``when`` no ``case`` corresponde a um tipo de instrução. exemplo:
+
+    - Para ``lw``, ele ativa ``regWrite`` e ``aluSrc`` e configura ``resultSrc`` para selecionar a memória.
+    - Para ``sw``, ele ativa ``memWrite``.
+    - Para instruções do Tipo-R, ele configura o caminho de dados para usar dois registradores (``aluSrc <= '0'``).
+
+- **Sinal ``aluOp``**: Este processo não gera o ``aluControl`` final diretamente. Em vez disso, ele gera um sinal intermediário de 2 bits, ``aluOp``, que pré-classifica a operação da ULA (ex: "00" para soma, "01" para subtração, "10" para operações que dependem do ``funct3``). Isso simplifica a lógica e a divide em dois níveis.
+
+##### 3. Processo aluDecoder
+Este segundo processo tem como sua única função gerar o sinal final ``aluControl`` de 3 bits que vai para a ULA.
+
+- **Lógica de Dois Níveis**: Ele usa o ``aluOp`` do decodificador principal como sua entrada principal.
+
+- **Casos Simples**: Se ``aluOp`` for "00" ou "01", ele sabe imediatamente que a operação é ``ADD`` ou ``SUB``.
+
+- **Caso Complexo (``aluOp = "10"``)**: Quando ``aluOp`` é "10", o decodificador sabe que precisa olhar mais a fundo, para o campo ``funct3`` da instrução.
+
+    - Um ``case`` aninhado em ``funct3`` seleciona a operação correta (``slt``, ``xor``, ``or``, ``and``).
+
+    - Para o caso especial de ``funct3 = "000"``, ele precisa diferenciar entre ``add/addi`` e ``sub``. A lógica ``if RtypeSub = '1'`` (que usa o ``funct7``) faz essa distinção final.
 ___
 #### **`registers.vhd`**:
 O banco de registradores. Usa os campos `rs1` e `rs2` como endereços para ler os valores dos operandos, que são disponibilizados em suas saídas `rd1` e `rd2`.
