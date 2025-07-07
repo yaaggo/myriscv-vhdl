@@ -747,6 +747,77 @@ ___
 #### **`extend.vhd`**:
 A unidade de extensão de sinal. Recebe o campo de imediato (`imm`) da instrução e o estende para 32 bits, de acordo com o formato da instrução (I, S, B ou J), determinado pelo sinal `immSrc` do controlador.
 
+```vhdl
+entity extend is
+    port(
+        -- entrada: o campo imediato "bruto" de 25 bits da instrucao
+        imm    : in  std_logic_vector(24 downto 0);
+        
+        -- entrada: sinal de controle que define o formato do imediato
+        immSrc : in  std_logic_vector(1 downto 0);
+        
+        -- saida: o valor imediato de 32 bits com extensao de sinal
+        immExt : out std_logic_vector(31 downto 0) 
+    );  
+end extend;
+```
+- **``imm``**: Esta entrada recebe uma fatia de 25 bits da instrução original (``instr(31 downto 7)``). Este vetor contém todos os bits que podem, potencialmente, fazer parte de um valor imediato, independentemente do formato da instrução.
+
+- **``immSrc``**: Este é o sinal de controle que vem do ``controller``. Ele diz à unidade ``extend`` qual é o formato do imediato e, portanto, como os bits da entrada imm devem ser interpretados e montados. A codificação usada é:
+
+    - ``"00"``: Formato I (usado em ``addi``, ``lw``, ``jalr``, etc.)
+
+    - ``"01"``: Formato S (usado em ``sw``)
+
+    - ``"10"``: Formato B (usado em ``beq``, ``bne``)
+
+    - ``"11"``: Formato J (usado em ``jal``)
+
+- **``immExt``**: A porta de saída de 32 bits. Ela fornece o valor imediato final, corretamente montado e com a extensão de sinal aplicada. Extensão de sinal significa que o bit mais significativo do imediato original (o bit de sinal) é replicado para preencher os bits extras à esquerda, garantindo que números negativos continuem negativos após a extensão para 32 bits.
+```vhdl
+architecture behavior of extend is
+begin
+    -- processo combinacional sensivel ao imediato bruto e ao seletor
+    process(imm, immSrc) begin
+        -- seleciona o tipo de extensao com base no sinal de controle immSrc
+        case immSrc is
+            -- formato i (loads, addi, jalr)
+            when "00" =>
+                -- estende o sinal do bit mais significativo (imm(24)) e concatena com o imediato de 12 bits
+                immExt <= (31 downto 12 => imm(24)) & imm(24 downto 13);
+                
+            -- formato s (stores)
+            when "01" =>
+                -- remonta o imediato tipo-s e estende o sinal
+                immExt <= (31 downto 12 => imm(24)) & imm(24 downto 18) & imm(4 downto 0);
+                
+            -- formato b (branches)
+            when "10" =>
+                -- remonta o imediato tipo-b, estende o sinal e adiciona o '0' no final
+                immExt <= (31 downto 12 => imm(24)) & imm(0) & imm(23 downto 18) & imm(4 downto 1) & '0';
+                
+            -- formato j (jal)
+            when "11" =>
+                -- remonta o imediato tipo-j, estende o sinal e adiciona o '0' no final
+                immExt <= (31 downto 20 => imm(24)) & imm(12 downto 5) & imm(13) & imm(23 downto 14) & '0';
+                
+            -- para qualquer outro caso, a saida eh indefinida ('-')
+            when others =>
+                immExt <= (31 downto 0 => '-');
+                
+        end case;    
+    end process ;    
+end;
+```
+O ``case`` dentro do processo é o coração desta unidade. Cada ``when`` corresponde a um formato de imediato do RISC-V:
+
+- **``when "00" (I)``**: Este é o caso mais simples. O imediato de 12 bits está contido nos bits ``instr[31:20]``. A lógica simplesmente pega o bit de sinal (``imm(24)``, que corresponde a ``instr(31)``), o replica 20 vezes para preencher os bits mais significativos (``31 downto 12``), e concatena com os 12 bits do imediato (``imm(24 downto 13)``).
+
+- **``when "01" (S)``**: O imediato de 12 bits para instruções de armazenamento está dividido em dois campos na instrução: ``instr[31:25]`` e ``instr[11:7]``. Esta linha de código primeiro pega o bit de sinal (``imm(24)``), realiza a extensão de sinal, e então concatena os dois pedaços do imediato na ordem correta (``imm(24 downto 18)`` e ``imm(4 downto 0)``) para formar o valor final de 12 bits.
+
+- **``when "10" (B)``**: O imediato para desvios (branches) tem seus 12 bits (+ 1 bit zero implícito) espalhados pela instrução para otimizar a decodificação. Esta linha executa uma operação de reembaralhamento de pinos, pegando fatias de diferentes partes da entrada ``imm``, montando-as na ordem correta, adicionando o ``'0'`` no final (pois os alvos de desvio são sempre alinhados a 2 bytes) e, finalmente, estendendo o bit de sinal.
+
+- **``when "11" (J)``**: Similar ao formato B, o imediato para saltos (jumps) de 20 bits (+ 1 zero implícito) também está espalhado. A lógica aqui é ainda mais complexa, selecionando os bits ``imm(12 downto 5)``, ``imm(13)`` e ``imm(23 downto 14)`` para reconstruir o valor do desvio, adicionando o ``'0'`` no final e realizando a extensão de sinal.
 ### 3\. Execução (Execute - EX)
 
 A fase de execução é onde a computação principal da instrução ocorre. A Unidade Lógica e Aritmética (ULA) realiza a operação matemática ou lógica necessária.
