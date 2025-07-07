@@ -43,14 +43,14 @@ entity ifetch is
 end entity ifetch;
 
 ```
-* **clk_i** : É o sinal de clock principal do sistema. Todas as operações síncronas, como a atuualização do program counter, ocorrem na borda de suubida deste sinal.
-* **rst_i**: O sinal de reset. Quando ativado, ele força o PC a um estado inicial conhecido, que geralmente é o endereço da primeira instrução do programa (no caso, ``x"00000000"``).
-* **pc_src_i**: Este é um sinal de controle de 1 bit quee atua como seeletor para um multiplexador interno. Ele determina qual será o endereço da próxima instrução:
+* **`clk_i`** : É o sinal de clock principal do sistema. Todas as operações síncronas, como a atuualização do program counter, ocorrem na borda de suubida deste sinal.
+* **`rst_i`**: O sinal de reset. Quando ativado, ele força o PC a um estado inicial conhecido, que geralmente é o endereço da primeira instrução do programa (no caso, ``x"00000000"``).
+* **`pc_src_i`**: Este é um sinal de controle de 1 bit quee atua como seeletor para um multiplexador interno. Ele determina qual será o endereço da próxima instrução:
     * Se ``pc_src_i`` for ``'0'`` o PC será atualizado com o endereço da instrução seeeguinte em sequência.
     * Se ``pc_src_i`` for ``'1'``, o PC será atualizado com o endereço de destino (``pc_target_i``), o que ocorre durante uma instrução de desvio ou salto.
-* **pc_target_i**: Um vetor de ee32 bits que fornece o endereço de destino para uma operação de desvio ou salto. Este valor é calculado fora da unidade ``ifetch`` e é carregado no PC sse ``pc_src_i`` for ``'1'``.
-* **pc_target_o**: Fornece o endereço da instrução atual para o resto do processador. Este endereço é usado principalmente para ler a instrução correspondente na memória de instruções (ROM).
-* **pc_plus4_o**: Esta saída pré-calcula e fornece o endereço da próxima instrução sequencial (pc + 4). Este valor tem dois usos principais:
+* **`pc_target_i`**: Um vetor de ee32 bits que fornece o endereço de destino para uma operação de desvio ou salto. Este valor é calculado fora da unidade ``ifetch`` e é carregado no PC sse ``pc_src_i`` for ``'1'``.
+* **`pc_target_o`**: Fornece o endereço da instrução atual para o resto do processador. Este endereço é usado principalmente para ler a instrução correspondente na memória de instruções (ROM).
+* **`pc_plus4_o`**: Esta saída pré-calcula e fornece o endereço da próxima instrução sequencial (pc + 4). Este valor tem dois usos principais:
     * é o valor padrão para a atualização do PC no próximo ciclo de clock.
     * é usado para calcular o endereço de retorno em instruções como jal (jump and link).
 
@@ -95,9 +95,9 @@ begin
     
 end architecture behavior;
 ```
-* **pc_register_unit (registrador do PC)**: Este é o componente central da unidade, uma instância da entidade ``rreg32``. Ele funciona como o **program counter**, armazenando fisicamente o endereço de 32 bits da instrução que está sendo executada no momento. A cada ciclo de clock, ele é atualizado com um novo valor vindo da entrada ``d``, que é determinado pelo multiplexador. Sua saída ``q`` representa o endereço da instrução atual.
-* **adder_pcplus4_unit**: Esta instância da entidade ``adder32`` tem a tarefa de calcular o endereço da próxima instrução sequencial. Ele pega a saída atual do PC (``pc_reg_out_s``), soma com a constante 4 e gera o resultado ``pc_plus_4_s``. Esse cálculo é continuo e necessário porque as instruções têm 4 bytes de comprimento.
-* **mux_next_pc_unit**: Este multiplexador, que é instância de ``mux232`` é o responsável pela tomada de decisão. Ele escolhe qual será o próximo valor a ser carregado no PC. A escolha é controlada pelo sinal ``pc_src_i``:
+* **`pc_register_unit (registrador do PC)`**: Este é o componente central da unidade, uma instância da entidade ``rreg32``. Ele funciona como o **program counter**, armazenando fisicamente o endereço de 32 bits da instrução que está sendo executada no momento. A cada ciclo de clock, ele é atualizado com um novo valor vindo da entrada ``d``, que é determinado pelo multiplexador. Sua saída ``q`` representa o endereço da instrução atual.
+* **`adder_pcplus4_unit`**: Esta instância da entidade ``adder32`` tem a tarefa de calcular o endereço da próxima instrução sequencial. Ele pega a saída atual do PC (``pc_reg_out_s``), soma com a constante 4 e gera o resultado ``pc_plus_4_s``. Esse cálculo é continuo e necessário porque as instruções têm 4 bytes de comprimento.
+* **`mux_next_pc_unit`**: Este multiplexador, que é instância de ``mux232`` é o responsável pela tomada de decisão. Ele escolhe qual será o próximo valor a ser carregado no PC. A escolha é controlada pelo sinal ``pc_src_i``:
     * Se ``pc_src_i = '0'``, o multiplexador seleciona sua entrada ``d0``, que é o valor de ``pc + 4``. Isso corresponde à execução normal e sequencial do programa.
     * Se ``pc_src_i = '1'``, ele seleciona a entrada ``d1``, que é o ``pc_target_i``. Isso acontece quando o processador precisa executar quando o processador precisa executar um desvio (branch) ou um salto (jump), alterando o fluxo de controle para um novo endereço.
 
@@ -123,11 +123,11 @@ end entity rom;
 
 ```
 * **generic**: Os genéricos tornam o componente configurável.
-    * **DATA_WIDTH := 8**: Define que cada posição individual na memória armazena um dado de 8 bits.
-    * **ADDRESS_WIDTH := 16**: Define que o endereço usado para acessar a memória tem 16 bits.
-    * **DEPTH := 65536** Define o número total de endereços de memória. Este valor é diretamente derivado da largura do endereço (2^16 = 65536).
-* **a**: Esta é a porta de endereço de entrada. O processador (através do ``ifetch``) coloca aqui o endereço de 32 bits da instrução que deseja ler. Internamente, a ROM usará apenas os 16 bits inferiores deste vetor (``a(15 downto 0)``) para selecionar a posição na memória, conforme definido pelo ``ADDRESS_WIDTH``.
-* **rd**: Esta é a porta de dados de saída. Após receber um endereço em ``a``, a ROM lê o conteúdo e o disponibiliza nesta porta. Como as instruções RISC-V têm 32 biits e a memória é organizada em bytes (``DATA_WIDTH = 8``), a ROM internamente lê 4 bytes consecutivos a partir do endereço base e os concatena para formar a instrução completa de 32 bits que é enviada para o processador.
+    * **`DATA_WIDTH := 8`**: Define que cada posição individual na memória armazena um dado de 8 bits.
+    * **`ADDRESS_WIDTH := 16`**: Define que o endereço usado para acessar a memória tem 16 bits.
+    * **`DEPTH := 65536`** Define o número total de endereços de memória. Este valor é diretamente derivado da largura do endereço (2^16 = 65536).
+* **`a`**: Esta é a porta de endereço de entrada. O processador (através do ``ifetch``) coloca aqui o endereço de 32 bits da instrução que deseja ler. Internamente, a ROM usará apenas os 16 bits inferiores deste vetor (``a(15 downto 0)``) para selecionar a posição na memória, conforme definido pelo ``ADDRESS_WIDTH``.
+* **`rd`**: Esta é a porta de dados de saída. Após receber um endereço em ``a``, a ROM lê o conteúdo e o disponibiliza nesta porta. Como as instruções RISC-V têm 32 biits e a memória é organizada em bytes (``DATA_WIDTH = 8``), a ROM internamente lê 4 bytes consecutivos a partir do endereço base e os concatena para formar a instrução completa de 32 bits que é enviada para o processador.
 
 ``` vhdl
 architecture behavior of rom is
@@ -151,7 +151,7 @@ begin
         variable file_status: file_open_status;
     begin
         -- tenta abrir o arquivo binario em modo de leitura
-        file_open(file_status, f, "C:\Users\yagog\Documents\coding\riscv\bitstream.bin", read_mode);
+        file_open(file_status, f, "bitstream.bin", read_mode);
         
         -- se o arquivo foi aberto com sucesso
         if file_status = open_ok then
@@ -231,6 +231,48 @@ ___
 
 Um registrador genérico de 32 bits, usado dentro do `ifetch` para armazenar o valor atual do PC.
 
+```vhdl
+entity rreg32 is
+    port(
+        clk : in  std_logic;                       -- entrada: sinal de clock do sistema
+        rst : in  std_logic;                       -- entrada: sinal de reset para inicializacao
+        d   : in  std_logic_vector(31 downto 0);   -- entrada: dado de 32 bits a ser armazenado
+        q   : out std_logic_vector(31 downto 0)    -- saida: dado de 32 bits atualmente armazenado
+    );
+end rreg32;
+
+```
+- **`clk`**: Porta de clock. Este é um sinal de entrada que sincroniza a operação do registrador. A captura do novo dado ocorre especificamente na borda de subida deste sinal (max usa borda de descida, mas todas as pesquisas que fiz, é usado borda de subida).
+
+- **`rst`**: A porta de reset (reinicialização). Quando este sinal de entrada é ativado, ele força o registrador a um estado padrão predefinido (geralmente todos os bits em '0'), independentemente do clock ou da entrada d. É fundamental para garantir que o sistema comece em um estado conhecido.
+
+- **`d`**: Esta é a porta de dados de entrada (data). O valor presente nesta porta é o que será capturado e armazenado dentro do registrador na próxima borda de subida do clock (se o reset não esteja ativo).
+
+- **`q`**: A porta de saída. Esta porta expõe continuamente o valor que está atualmente armazenado dentro do registrador. Seu valor só muda após a borda de subida do clock ou durante um reset.
+
+```vhdl
+architecture behavior of rreg32 is
+begin
+    -- define um processo sensivel aos sinais de clock e reset
+    process(clk, rst)
+    begin
+        -- checa se o sinal de reset esta ativo (reset assincrono)
+        if (rst = '1') then
+            -- se o reset estiver ativo, a saida 'q' eh zerada
+            q <= (others => '0');
+        -- senao, na borda de subida do clock...
+        elsif (rising_edge(clk)) then
+            -- a saida 'q' recebe o valor da entrada 'd'
+            q <= d;
+        end if;
+    end process;
+end behavior;
+
+```
+- **`process(clk, rst)`**: A lista de sensibilidade informa ao simulador que o código dentro do processo só deve ser executado quando houver uma mudança nos sinais `clk` ou `rst`.
+- **`if (rst = '1') then`**: A primeira condição verificada é a do reset. Se o sinal ``rst`` estiver em nivel lógico alto, a saída `q` é imediatamente forçada para zero. A expressão `(others => '0')` é uma forma de atribuir '0' a todos os 32 bits do vetor `q`. Como essa ação ocorre independentemente do clock, da para chamar de reset assíncrono.
+- **`elsif (rising_edge(clk)) then`**: Se o reset não estiver ativo, o processo então verifica se ocorreu uma borda de subida no sinal de clock. A função `rising_edge()`detecta exatamente isso.
+- **`q <= d`**: Apenas no instante da borda de subida do clock, o valor presente na entrada `d`é registrado e atribuído à saída `q`. Em todos os outros momentos, `q` mantém seu valor anterior, efetivamente "lembrando" o dado (funcionamento basicamente igual ao de um flip-flop D).
 ___
 ### **`adder32.vhd`**: 
 O somador é usado aqui para duas finalidades: calcular `PC + 4` dentro do `ifetch` e, no `design` principal, para calcular o endereço de destino para instruções de desvio (`pc_current + imm_ext`).
