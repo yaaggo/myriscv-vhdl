@@ -309,12 +309,92 @@ ___
 
 Nesta fase, a instrução buscada é decodificada para determinar qual operação deve ser executada. Os operandos são lidos do banco de registradores e os sinais de controle para as fases seguintes são gerados.
 
-#### Componentes de Código Envolvidos:
+### Componentes de Código Envolvidos:
 
-**`decode.vhd`**: Recebe a instrução de 32 bits e a divide em seus campos constituintes (`opcode`, `rs1`, `rs2`, `rd`, `funct3`, `funct7`, `imm`).
-  * **`controller.vhd`**: A unidade de controle. Ela recebe os campos `opcode`, `funct3` e `funct7` e gera todos os sinais de controle necessários para o resto do processador (`regWrite`, `memWrite`, `aluSrc`, `aluControl`, `PCSrc`, etc.).
-  * **`registers.vhd`**: O banco de registradores. Usa os campos `rs1` e `rs2` como endereços para ler os valores dos operandos, que são disponibilizados em suas saídas `rd1` e `rd2`.
-  * **`extend.vhd`**: A unidade de extensão de sinal. Recebe o campo de imediato (`imm`) da instrução e o estende para 32 bits, de acordo com o formato da instrução (I, S, B ou J), determinado pelo sinal `immSrc` do controlador.
+#### **`decode.vhd`**: 
+Recebe a instrução de 32 bits e a divide em seus campos constituintes (`opcode`, `rs1`, `rs2`, `rd`, `funct3`, `funct7`, `imm`).
+
+```vhdl
+entity decode is
+    port (
+        instr    : in  std_logic_vector(31 downto 0); -- entrada: a instrucao de 32 bits
+        opcode   : out std_logic_vector(6 downto 0);  -- saida: campo opcode (bits 6-0)
+        rd       : out std_logic_vector(4 downto 0);  -- saida: registrador de destino (bits 11-7)
+        funct3   : out std_logic_vector(2 downto 0);  -- saida: campo de funcao de 3 bits (14-12)
+        rs1      : out std_logic_vector(4 downto 0);  -- saida: primeiro registrador fonte (19-15)
+        rs2      : out std_logic_vector(4 downto 0);  -- saida: segundo registrador fonte (24-20)
+        funct7   : out std_logic_vector(6 downto 0);  -- saida: campo de funcao de 7 bits (31-25)
+        imm25    : out std_logic_vector(24 downto 0)  -- saida: campo imediato "bruto" (31-7)
+    );
+end entity;
+```
+- **``instr``**: A instrução de 32 bits a ser decodificada, vinda diretamente da memória de instruções (``rom``).
+
+- **``opcode``**: O código da operação. Este campo de 7 bits (``instr(6 downto 0)``) é a identificação principal da instrução. A Unidade de Controle o utiliza para determinar o formato da instrução (``R``, ``I``, ``S``, etc.) e gerar os principais sinais de controle.
+
+- **``rd``**: O endereço do registrador de destino (``instr(11 downto 7)``). É o registrador que receberá o resultado final da operação.
+
+- **``funct3``**: Um campo de função adicional de 3 bits (``instr(14 downto 12)``). Ele ajuda a diferenciar operações que compartilham o mesmo opcode. Por exemplo, para instruções do ``Tipo-R``, ele distingue entre ``ADD/SUB``, ``SLL``, ``SLT``, etc.
+
+- **``rs1``**: O endereço do primeiro registrador fonte (``instr(19 downto 15)``). Contém o primeiro operando para a ``ULA``.
+
+- **``rs2``**: O endereço do segundo registrador fonte (``instr(24 downto 20)``). Contém o segundo operando para a ULA em instruções do ``Tipo-R`` e ``Tipo-S``.
+
+- **``funct7``**: Um segundo campo de função adicional de 7 bits (``instr(31 downto 25)``). É usado principalmente para distinguir entre operações do ``Tipo-R`` que possuem o mesmo opcode e funct3, como ADD (``funct7 = 0b0000000``) e ``SUB`` (``funct7 = 0b0100000``).
+
+- **``imm25``**: Este campo (``instr(31 downto 7)``) agrupa todos os bits que podem, potencialmente, fazer parte de um valor imediato. Ele não representa um imediato válido por si só, mas sim uma fatia "bruta" da instrução. Este vetor é então enviado para a entidade ``extend``, que sabe como extrair e montar o imediato correto de ``12``, ``20`` ou ``21`` bits, dependendo do tipo da instrução.
+
+```vhdl
+architecture behavior of decode is
+begin
+    -- conecta os bits 6 a 0 da instrucao a saida opcode
+    opcode <= instr(6 downto 0);
+
+    -- conecta os bits 11 a 7 da instrucao a saida rd
+    rd <= instr(11 downto 7);
+
+    -- conecta os bits 14 a 12 da instrucao a saida funct3
+    funct3 <= instr(14 downto 12);
+
+    -- conecta os bits 19 a 15 da instrucao a saida rs1
+    rs1 <= instr(19 downto 15);
+
+    -- conecta os bits 24 a 20 da instrucao a saida rs2
+    rs2 <= instr(24 downto 20);
+
+    -- conecta os bits 31 a 25 da instrucao a saida funct7
+    funct7 <= instr(31 downto 25);
+
+    -- conecta os bits 31 a 7 da instrucao a saida imm25
+    imm25 <= instr(31 downto 7);
+    
+end architecture;
+```
+- **``opcode <= instr(6 downto 0)``**: Os 7 bits menos significativos da instrução de entrada (``instr``) são conectados diretamente à porta de saída opcode.
+
+- **``rd <= instr(11 downto 7)``**: Os bits 11 a 7 da ``instr`` são conectados à porta de saída ``rd``.
+
+- **``funct3 <= instr(14 downto 12)``**: Os bits 14 a 12 da ``instr`` são conectados à porta de saída funct3.
+
+- **``rs1 <= instr(19 downto 15)``**: Os bits 19 a 15 da ``instr`` são conectados à porta de saída ``rs1``.
+
+- **``rs2 <= instr(24 downto 20)``**: Os bits 24 a 20 da ``instr`` são conectados à porta de saída ``rs2``.
+
+- **``funct7 <= instr(31 downto 25)``**: Os 7 bits mais significativos da ``instr`` são conectados à porta de saída ``funct7``.
+
+- **``imm25 <= instr(31 downto 7)``**: Uma fatia maior da instrução, dos bits 31 a 7, é conectada à porta de saída ``imm25``.
+
+Em resumo, a entidade decode não processa informação. Ela simplesmente a organiza, expondo os campos da instrução em portas de saída nomeadas e de tamanho apropriado, prontas para serem usadas pela ``controller``, ``registers`` e ``extend``.
+
+___
+#### **`controller.vhd`**: 
+A unidade de controle. Ela recebe os campos `opcode`, `funct3` e `funct7` e gera todos os sinais de controle necessários para o resto do processador (`regWrite`, `memWrite`, `aluSrc`, `aluControl`, `PCSrc`, etc.).
+___
+#### **`registers.vhd`**:
+O banco de registradores. Usa os campos `rs1` e `rs2` como endereços para ler os valores dos operandos, que são disponibilizados em suas saídas `rd1` e `rd2`.
+___
+#### **`extend.vhd`**:
+A unidade de extensão de sinal. Recebe o campo de imediato (`imm`) da instrução e o estende para 32 bits, de acordo com o formato da instrução (I, S, B ou J), determinado pelo sinal `immSrc` do controlador.
 
 ### 3\. Execução (Execute - EX)
 
