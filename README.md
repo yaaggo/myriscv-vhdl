@@ -103,7 +103,7 @@ end architecture behavior;
 
 As duas últimas linhas do código simplesmente conectam os sinais internos gerados pelo registrador e pelo somador às portas de saída da entidade ``ifetch``, tornando esses valores disponíveis para outras partes do processador.
 ___
-### **`rom.vhd`**: 
+#### **`rom.vhd`**: 
 A entidade rom (Read-Only Memory) é um componente que armazena o programa no qual o processador irá executar. Ela funciona como uma memória somente de leitura que, ao receber um endereço do ``ifetch``, retorna a instrução de 32 bits correspondente.
 
 ```vhdl
@@ -227,7 +227,7 @@ end behavior;
 - Como o processador lê palavras de 32 bits, mas a memória é organizada em bytes, o processo lê quatro posíções consecutivas da memória a partir do ``base_addr_int``.
 - Ele monta a palavra de 32 bits na porta de saída ``rd`` concatenando os quatro bytes lidos na ordem correta (little-endian).
 ___
-### **`rreg32.vhd`**: 
+#### **`rreg32.vhd`**: 
 
 Um registrador genérico de 32 bits, usado dentro do `ifetch` para armazenar o valor atual do PC.
 
@@ -274,8 +274,35 @@ end behavior;
 - **`elsif (rising_edge(clk)) then`**: Se o reset não estiver ativo, o processo então verifica se ocorreu uma borda de subida no sinal de clock. A função `rising_edge()`detecta exatamente isso.
 - **`q <= d`**: Apenas no instante da borda de subida do clock, o valor presente na entrada `d`é registrado e atribuído à saída `q`. Em todos os outros momentos, `q` mantém seu valor anterior, efetivamente "lembrando" o dado (funcionamento basicamente igual ao de um flip-flop D).
 ___
-### **`adder32.vhd`**: 
+#### **`adder32.vhd`**: 
 O somador é usado aqui para duas finalidades: calcular `PC + 4` dentro do `ifetch` e, no `design` principal, para calcular o endereço de destino para instruções de desvio (`pc_current + imm_ext`).
+
+```vhdl
+entity adder32 is
+    port(
+        a : in  std_logic_vector(31 downto 0); -- entrada a: primeiro operando de 32 bits
+        b : in  std_logic_vector(31 downto 0); -- entrada b: segundo operando de 32 bits
+        s : out std_logic_vector(31 downto 0)  -- saida s: resultado da soma de a + b
+    );
+end adder32;
+```
+- **`a`**: A primeira entrada de 32 bits para operação de soma.
+- **`b`**: A segunda entrada de 32 bits para operação de soma.
+- **`s`**: A saída de 32 bits que contém o resultado da coma de `a + b` (não tem tratamento de overflow).
+
+```vhdl
+architecture behavior of adder32 is
+begin
+    -- atribui a 's' o resultado da soma de 'a' e 'b'
+    -- e necessario converter os tipos para realizar a operacao aritmetica
+    s <= std_logic_vector(unsigned(a) + unsigned(b));
+end behavior;
+```
+- **`s <= std_logic_vector(unsigned(a) + unsigned(b))`**:
+    - ``unsigned(a)`` e ``unsigned(b)``: As portas de entrada `a` e ``b`` são do tipo ``std_logic_vector``, que para o VHDL é apenas uma coleção de bits (``'0'``, ``'1'``, ``'X'``, etc.) sem significado numérico. Para realizar uma operação aritmética como a soma, precisamos primeiro dizer ao compilador como interpretar esses bits. A função ``unsigned()`` (da biblioteca ieee.numeric_std) faz exatamente isso: ela converte (faz um "type cast") os vetores de bits para o tipo ``unsigned``, que representa um número inteiro sem sinal.
+    - ``... + ...``: Uma vez que ``a`` e ``b`` são tratados como números do tipo ``unsigned``, o operador de adição ``+`` pode ser aplicado a eles da maneira que esperamos.
+    - ``std_logic_vector(...)``: O resultado da soma ainda é do tipo ``unsigned``. No entanto, a porta de saída ``s`` é do tipo ``std_logic_vector``. Portanto, é necessário fazer a conversão inversa, transformando o resultado numérico de volta para um vetor de bits padrão antes de ir para a saída.
+    - ``s <= ...``: Este é o operador de atribuição de sinal em VHDL. Ele pega o valor final calculado à direita e o atribui à porta de saída ``s``.
 ___
 
 ### 2\. Decodificação de Instrução (Instruction Decode - ID)
@@ -284,7 +311,7 @@ Nesta fase, a instrução buscada é decodificada para determinar qual operaçã
 
 #### Componentes de Código Envolvidos:
 
-  * **`decode.vhd`**: Recebe a instrução de 32 bits e a divide em seus campos constituintes (`opcode`, `rs1`, `rs2`, `rd`, `funct3`, `funct7`, `imm`).
+**`decode.vhd`**: Recebe a instrução de 32 bits e a divide em seus campos constituintes (`opcode`, `rs1`, `rs2`, `rd`, `funct3`, `funct7`, `imm`).
   * **`controller.vhd`**: A unidade de controle. Ela recebe os campos `opcode`, `funct3` e `funct7` e gera todos os sinais de controle necessários para o resto do processador (`regWrite`, `memWrite`, `aluSrc`, `aluControl`, `PCSrc`, etc.).
   * **`registers.vhd`**: O banco de registradores. Usa os campos `rs1` e `rs2` como endereços para ler os valores dos operandos, que são disponibilizados em suas saídas `rd1` e `rd2`.
   * **`extend.vhd`**: A unidade de extensão de sinal. Recebe o campo de imediato (`imm`) da instrução e o estende para 32 bits, de acordo com o formato da instrução (I, S, B ou J), determinado pelo sinal `immSrc` do controlador.
