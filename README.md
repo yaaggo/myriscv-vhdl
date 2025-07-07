@@ -976,9 +976,134 @@ ___
 
 Esta fase é responsável por interagir com a memória de dados. Ela é utilizada apenas por instruções de carga (`lw`) e armazenamento (`sw`).
 
-#### Componentes de Código Envolvidos:
+### Componentes de Código Envolvidos:
 
-  * **`ram.vhd`**: A memória de dados (RAM). Para uma instrução `sw`, ela escreve o dado de um registrador na posição de memória indicada pelo resultado da ULA. Para uma instrução `lw`, ela lê o dado da memória e o disponibiliza para a próxima fase. O sinal `memWrite` do controlador determina se a operação é de escrita.
+#### **`ram.vhd`**:
+A memória de dados (RAM). Para uma instrução `sw`, ela escreve o dado de um registrador na posição de memória indicada pelo resultado da ULA. Para uma instrução `lw`, ela lê o dado da memória e o disponibiliza para a próxima fase. O sinal `memWrite` do controlador determina se a operação é de escrita.
+
+```vhdl
+entity ram is
+    -- parametros genericos para configuracao da ram
+    generic(
+        DATA_WIDTH    : integer := 8;     -- largura do dado em cada endereco (8 bits = 1 byte)
+        ADDRESS_WIDTH : integer := 16;    -- largura do barramento de endereco (16 bits)
+        DEPTH         : integer := 65536  -- profundidade da memoria (2^16 = 65536)
+    );
+    port (
+        clk: in  std_logic;                     -- entrada: sinal de clock para sincronizar a escrita
+        a  : in  std_logic_vector(31 downto 0); -- entrada: endereco de 32 bits para leitura ou escrita
+        wd : in  std_logic_vector(31 downto 0); -- entrada: dado de 32 bits a ser escrito (write data)
+        we : in  std_logic;                     -- entrada: habilitacao de escrita (write enable)
+        rd : out std_logic_vector(31 downto 0)  -- saida: dado de 32 bits lido do endereco (read data)
+    );
+end entity ram;
+```
+Os ``generics`` são iguais o da rom, não irei detalhar novamente.
+- **``clk``**: O sinal de clock do sistema. É usado para sincronizar a operação de escrita, que ocorre na borda de subida do clock para garantir estabilidade.
+
+- **``a``**: A porta de endereço. Este valor de 32 bits, geralmente vindo do resultado da ULA, especifica a localização na memória para a operação de leitura ou de escrita.
+
+- **``wd``**: A porta de dados de escrita. O valor presente nesta porta é o que será armazenado na memória durante uma operação de escrita (instrução ``sw``).
+
+- **``we``**: A porta de habilitação de escrita. Este é um sinal de controle fundamental vindo do ``controller``.
+
+    - Se ``we = '1'``, a operação é de escrita. O dado em ``wd`` será escrito no endereço ``a`` na próxima borda de subida do clock.
+
+    - Se ``we = '0'``, nenhuma escrita ocorre. A memória está efetivamente em modo de leitura (ou inativa).
+
+- **``rd``**: A porta de dados de leitura. Esta porta expõe continuamente o valor de 32 bits armazenado na posição de memória indicada pelo endereço ``a``. A leitura é assíncrona.
+
+```vhdl
+architecture behavior of ram is
+    -- define um tipo para o array da memoria (array de bytes)
+    type ram_type is array (0 to DEPTH-1) of std_logic_vector(DATA_WIDTH-1 downto 0);
+    
+    -- declara o sinal fisico da memoria de dados (dmem) e o zera
+    signal dmem : ram_type := (others => (others => '0'));
+    
+    -- sinal para guardar o endereco convertido para inteiro
+    signal base_addr_int : natural range 0 to DEPTH-1;
+
+begin
+    -- Processo 1: Conversao do endereco de entrada (combinacional)
+    process(a)
+    begin
+        -- checa se o endereco eh desconhecido para seguranca da simulacao
+        if is_x(a(ADDRESS_WIDTH-1 downto 0)) then
+            base_addr_int <= 0;
+        else
+            -- converte os bits de endereco para um numero inteiro
+            base_addr_int <= to_integer(unsigned(a(ADDRESS_WIDTH-1 downto 0)));
+        end if;
+    end process;
+
+
+    -- Processo 2: Escrita Sincrona na Memoria
+    write_proc: process(clk)
+    begin
+        -- executa na borda de subida do clock
+        if rising_edge(clk) then
+            -- se a escrita estiver habilitada e os sinais forem validos
+            if we = '1' and not is_x(a) and not is_x(wd) then
+                -- checa se o endereco eh valido para escrever 4 bytes sem estourar a memoria
+                if base_addr_int <= (DEPTH - 4) then
+                    -- quebra a palavra de 32 bits em 4 bytes e escreve em enderecos consecutivos
+                    dmem(base_addr_int)   <= wd(7 downto 0);   -- byte 0 (menos significativo)
+                    dmem(base_addr_int+1) <= wd(15 downto 8);  -- byte 1
+                    dmem(base_addr_int+2) <= wd(23 downto 16); -- byte 2
+                    dmem(base_addr_int+3) <= wd(31 downto 24); -- byte 3 (mais significativo)
+                end if;
+            end if;
+        end if;
+    end process write_proc;
+
+
+    -- Processo 3: Leitura Assincrona (Combinacional) da Memoria
+    process(base_addr_int, dmem)
+    begin
+        -- checa se o endereco eh valido para ler 4 bytes
+        if base_addr_int <= (DEPTH - 4) then
+            -- le 4 bytes de enderecos consecutivos e os monta em uma palavra de 32 bits
+            rd(7 downto 0)   <= dmem(base_addr_int);
+            rd(15 downto 8)  <= dmem(base_addr_int+1);
+            rd(23 downto 16) <= dmem(base_addr_int+2);
+            rd(31 downto 24) <= dmem(base_addr_int+3);
+        else
+            -- se o endereco de leitura for invalido, a saida eh zero para evitar erros
+            rd <= (others => '0');
+        end if;
+    end process;
+
+end architecture behavior;
+```
+
+##### 1. Declarações Iniciais
+- **``type ram_type``**: Define a estrutura da memória como um array de vetores de 8 bits. Isso significa que, embora o processador trabalhe com palavras de 32 bits, o armazenamento físico é feito byte a byte.
+
+- **``signal dmem``**: É a declaração do sinal que representa a memória de dados em si, utilizando o tipo ``ram_type``.
+
+- **``signal base_addr_int``**: É um sinal auxiliar que armazena a versão inteira do endereço de entrada, facilitando seu uso como índice do array ``dmem``.
+
+##### 2. Processo de Conversão de Endereço
+Um processo combinacional que converte os bits de endereço relevantes da porta ``a`` em um número inteiro e o armazena em ``base_addr_int``. Ele serve para "preparar" o endereço para os outros dois processos.
+
+##### 3. Processo de Escrita (write_proc)
+Este processo é sequencial e descreve como a escrita ocorre.
+
+- **Sincronização**: A escrita só acontece na borda de subida do clock (``rising_edge(clk)``), garantindo que a memória só seja modificada em momentos específicos.
+
+- **Habilitação**: A condição ``if we = '1'`` garante que a escrita só ocorra quando o ``controller`` comandar.
+
+- **Escrita Byte a Byte**: Este é o ponto-chave. A palavra de 32 bits de entrada (``wd``) é dividida em 4 pedaços de 8 bits. Cada pedaço (byte) é então escrito em uma posição de memória consecutiva, começando pelo endereço base ``base_addr_int``.
+
+##### 4. Processo de Leitura
+Este processo é combinacional e descreve como a leitura acontece.
+
+- **Leitura Assíncrona**: Ele é sensível a mudanças no endereço (``base_addr_int``) e no próprio conteúdo da memória (``dmem``). Isso significa que a porta de saída ``rd`` é atualizada "instantaneamente" assim que o endereço de entrada muda.
+
+- **Montagem da Palavra**: A lógica aqui é o inverso da escrita. O processo lê 4 bytes de posições consecutivas da memória (``dmem``) e os "monta" na ordem correta para formar a palavra de 32 bits na porta de saída ``rd``.
+
+- **Proteção de Limites**: Tanto o processo de leitura quanto o de escrita verificam se o endereço está a, no máximo, 4 posições do final da memória, evitando erros de acesso fora dos limites do array. Se um endereço inválido for fornecido, a saída de leitura é 0.
 
 ### 5\. Escrita de Volta (Write-Back - WB)
 
