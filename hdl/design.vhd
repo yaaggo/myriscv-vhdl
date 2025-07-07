@@ -84,7 +84,13 @@ begin
 
     u_ext: entity work.extend port map (imm => imm25, immSrc => immSrc, immExt => imm_ext);
 
-    alu_operand2 <= imm_ext when aluSrc = '1' else reg_data2;
+    u_alu_operand_mux: entity work.mux232
+    port map (
+        d0 => reg_data2,    -- Conectado a 'd0' quando aluSrc = '0'
+        d1 => imm_ext,      -- Conectado a 'd1' quando aluSrc = '1'
+        s  => aluSrc,       -- Sinal de seleção
+        y  => alu_operand2  -- Saída conectada à entrada da ULA
+    );
 
     u_alu: entity work.alu port map (a => reg_data1, b => alu_operand2, aluControl => aluControl, result => alu_result, zero => zero);
 

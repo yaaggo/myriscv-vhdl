@@ -934,7 +934,42 @@ O comportamento da ULA é centrado em um process combinacional sensível às ent
     - ``zero <= '1' when ...``: Esta é uma atribuição de sinal condicional. Ela descreve um circuito que continuamente verifica se o valor numérico de ``res_s`` é ``zero``. Se todos os 32 bits de ``res_s`` forem ``'0'``, a saída ``zero`` se torna ``'1'``. Caso contrário, ``zero`` se torna ``'0'``.
 ___ 
 #### **`mux232.vhd`**: 
-Um multiplexador no `design.vhd` (`alu_operand2 <= ...`) seleciona o segundo operando para a ULA. A decisão é baseada no sinal `aluSrc` do controlador.
+Um multiplexador no `design.vhd` que seleciona o segundo operando para a ULA, se ele deve vir do segundo registrador fonte ou deve ser o valor imediato estendido. A decisão é baseada no sinal `aluSrc` do controlador.
+
+```vhdl
+entity mux232 is
+    port( 
+        -- entradas: duas fontes de dados de 32 bits
+        d0, d1 : in  std_logic_vector(31 downto 0);
+        
+        -- entrada: sinal de selecao de 1 bit
+        s      : in  std_logic;
+        
+        -- saida: saida de 32 bits selecionada
+        y      : out std_logic_vector(31 downto 0)
+    );
+end mux232;
+```
+- **``d0, d1``**: As duas portas de dados de entrada de 32 bits. Estas são as duas fontes de dados entre as quais o multiplexador irá escolher.
+
+- **``s``**: A porta de seleção. Este sinal de controle de 1 bit determina qual entrada será passada para a saída:
+    - Se ``s = '0'``, a saída ``y`` receberá o valor de ``d0``.
+    - Se ``s = '1'``, a saída ``y`` receberá o valor de ``d1``.
+- **``y``**: A porta de saída de 32 bits. Seu valor será sempre igual ao da entrada selecionada (``d0`` ou ``d1``).
+```vhdl
+architecture behavior of mux232 is
+begin
+    -- atribui 'd0' a 'y' se 's' for '0', senao atribui 'd1'
+    y <= d0 when s = '0' else d1;
+end behavior;
+```
+A linha ``y <= d0 when s = '0' else d1``; descreve de forma comportamental e completa a função do multiplexador:
+
+- ``when s = '0'``: Esta é a condição. O VHDL avalia o valor do sinal de seleção ``s``.
+
+- Se a condição for verdadeira (``s`` é igual a ``'0'``), a primeira atribuição é executada: ``y <= d0``. A saída ``y`` recebe o valor da entrada ``d0``.
+
+- ``else d1``: Se a condição for falsa (ou seja, ``s`` é ``'1'`` ou qualquer outro valor), a atribuição após o ``else`` é executada: a saída ``y`` recebe o valor da entrada ``d1``.
 
 ___
 ### 4\. Acesso à Memória (Memory - MEM)
@@ -953,23 +988,4 @@ Na fase final, o resultado da operação (seja o resultado da ULA ou o dado lido
 
   * **`registers.vhd`**: A porta de escrita do banco de registradores é usada aqui. O endereço do registrador de destino (`rd`) e o dado a ser escrito (`wd`) são fornecidos, e a escrita é habilitada pelo sinal `regWrite`.
   * **`mux332.vhd` (implementado com `with resultSrc select` no `design.vhd`)**: Este multiplexador seleciona qual dado será escrito no banco de registradores. As opções são: o resultado da ULA, o dado lido da memória ou o valor de `PC + 4` (para a instrução `jal`).
-
-## Estrutura dos Arquivos
-
-```
-├── adder32.vhd      # Somador de 32 bits.
-├── alu.vhd          # Unidade Lógica e Aritmética.
-├── controller.vhd   # Unidade de Controle principal que gera os sinais.
-├── decode.vhd       # Decodificador de instruções.
-├── design.vhd       # Entidade de topo, conecta todos os componentes.
-├── extend.vhd       # Unidade de extensão de sinal para imediatos.
-├── ifetch.vhd       # Unidade de busca de instrução (contém o PC).
-├── mux232.vhd       # Multiplexador 2-para-1 de 32 bits.
-├── mux332.vhd       # Multiplexador 3-para-1 de 32 bits.
-├── ram.vhd          # Memória de Dados (RAM).
-├── registers.vhd    # Banco de Registradores (32 registradores de 32 bits).
-├── rom.vhd          # Memória de Instruções (ROM).
-└── rreg32.vhd       # Registrador genérico de 32 bits.
-```
-
 -----
