@@ -9,7 +9,7 @@
       * [3. Execução (Execute - EX)](#3-execução-execute---ex)
       * [4. Acesso à Memória (Memory - MEM)](#4-acesso-à-memória-memory---mem)
       * [5. Escrita de Volta (Write-Back - WB)](#5-escrita-de-volta-write-back---wb)
-  * [Estrutura dos Arquivos](#estrutura-dos-arquivos)
+  * [Arquitetura e Organização do Processador](#implementação-geral-e-conclusão)
 
 ## Introdução
 
@@ -1105,12 +1105,97 @@ Este processo é combinacional e descreve como a leitura acontece.
 
 - **Proteção de Limites**: Tanto o processo de leitura quanto o de escrita verificam se o endereço está a, no máximo, 4 posições do final da memória, evitando erros de acesso fora dos limites do array. Se um endereço inválido for fornecido, a saída de leitura é 0.
 
-### 5\. Escrita de Volta (Write-Back - WB)
 
-Na fase final, o resultado da operação (seja o resultado da ULA ou o dado lido da memória) é escrito de volta no banco de registradores.
+### 5. Escrita de Volta (Write-Back - WB)
+O Write-Back é o estágio final da execução de uma instrução e o ponto alto de todo o processamento. Sua responsabilidade é pegar o resultado final da operação,  seja ele vindo da ULA, da memória de dados ou do cálculo de ``PC + 4``,  e escrevê-lo de volta no registrador de destino apropriado no banco de registradores.
 
-#### Componentes de Código Envolvidos:
+### Componentes de Código Envolvidos:
 
-  * **`registers.vhd`**: A porta de escrita do banco de registradores é usada aqui. O endereço do registrador de destino (`rd`) e o dado a ser escrito (`wd`) são fornecidos, e a escrita é habilitada pelo sinal `regWrite`.
-  * **`mux332.vhd` (implementado com `with resultSrc select` no `design.vhd`)**: Este multiplexador seleciona qual dado será escrito no banco de registradores. As opções são: o resultado da ULA, o dado lido da memória ou o valor de `PC + 4` (para a instrução `jal`).
------
+#### **``registers.vhd``**:
+```vhdl
+-- ...
+write_proc: process(clk, rst)
+begin
+    -- ... (lógica de reset)
+    elsif rising_edge(clk) then
+        -- se a escrita esta habilitada e os sinais sao validos...
+        if we = '1' and not is_x(a3) and not is_x(wd) then
+            -- ... e o registrador de destino nao eh o x0 (que eh sempre zero)
+            if to_integer(unsigned(a3)) /= 0 then
+
+                -- vvv linha que faz a escrita vvv
+                regs(to_integer(unsigned(a3))) <= wd;
+                
+            end if;
+        end if;
+    end if;
+end process write_proc;
+-- ...
+```
+- O banco de registradores desempenha seu papel final aqui através de sua porta de escrita.
+- A lógica deste estágio direciona o dado final para a porta de entrada ``wd`` (Write Data) e o endereço do registrador de destino (vindo do campo ``rd`` da instrução) para a porta ``a3``.
+- A escrita só é efetivada se o sinal de controle regWrite (conectado à porta we) estiver ativo, e ocorre de forma síncrona com o clock.
+
+#### **Multiplexador de Resultado (Lógica em design.vhd)**:
+- Para selecionar qual dado será escrito, o design utiliza um multiplexador 4-para-1, que é descrito através da instrução ``with resultSrc select``. Este MUX é o responsável por direcionar a fonte correta para a porta ``wd`` do banco de registradores. As quatro fontes possíveis são:
+    1. O resultado da ULA (``alu_result``), para instruções aritméticas/lógicas.
+    2. O dado lido da memória (``mem_data_out``), para instruções de carga (``lw``).
+    3. O valor de ``PC + 4``, para salvar o endereço de retorno em instruções de salto e link (``jal``, ``jalr``).
+    4. Um valor padrão de zeros para os demais casos.
+
+O sinal de controle ``resultSrc``, gerado pelo ``controller``, comanda este multiplexador, garantindo que o resultado correto da instrução atual seja selecionado para a escrita final.
+
+----
+
+## Implementação Geral e Conclusão
+A entidade ``design`` é o componente de mais alto nível do projeto; ela é a "placa-mãe" que conecta todos os módulos especializados que foram detalhados anteriormente. Esta entidade não contém muita lógica própria; em vez disso, sua arquitetura é estrutural, definindo a fiação e o fluxo de dados e de controle que dão vida ao processador MyRISC-V.
+
+### Sinais e Portas
+- **Portas de Entrada/Saída**: A entidade design possui apenas as portas essenciais ``clk`` e ``rst`` como entradas. Todas as suas saídas (``debug_*``) são dedicadas à depuração, permitindo que, durante a simulação, da para observar sinais críticos do processador a cada ciclo.
+
+- **Sinais Internos**: A grande lista de sinais declarados na arquitetura funciona como os "fios" do nosso circuito. Cada sinal carrega um dado específico (como `reg_data1`, ``alu_result``) ou um sinal de controle (como ``regWrite``, ``PCSrc``) entre as diferentes unidades do processador.
+
+### O Caminho de Dados em Ação
+O fluxo de execução de uma instrução pode ser traçado através das conexões no design:
+
+#### 1. Busca (Fetch):
+
+- A ``u_ifetch`` (unidade de busca) gera o endereço da instrução atual, ``pc_current``.
+
+- Este endereço é enviado para a ``u_rom`` (memória de instruções), que retorna a instrução de 32 bits no sinal ``instr``.
+
+#### 2. Decodificação (Decode):
+
+- A ``instr`` é imediatamente fatiada pela ``u_decode``, que expõe seus campos (``opcode``, ``rs1``, ``rs2``, ``rd``, ``imm25``, etc.).
+
+- Os endereços ``rs1`` e ``rs2`` são enviados para a ``u_regs`` (banco de registradores), que lê os dados e os disponibiliza em ``reg_data1`` e ``reg_data2``.
+
+- O campo ``imm25`` é enviado para a ``u_ext`` (unidade de extensão).
+
+- Os campos de função (``opcode``, ``funct3``, ``funct7``) são enviados para a ``u_controller`` (unidade de controle).
+
+#### 3. Execução (Execute):
+
+- A ``u_controller``, após analisar os campos da instrução e a flag ``zero`` (vinda da ULA), gera todos os sinais de controle.
+
+- A ``u_ext``, comandada pelo sinal ``immSrc``, converte o ``imm25`` no imediato de 32 bits com sinal estendido, ``imm_ext``.
+
+- O multiplexador ``u_alu_operand_mux``, controlado por ``aluSrc``, seleciona se o segundo operando da ULA será ``reg_data2`` ou ``imm_ext``, gerando ``alu_operand2``.
+
+- A ``u_alu`` (ULA) finalmente executa a operação (definida por ``aluControl``) sobre ``reg_data1`` e ``alu_operand2``, produzindo o ``alu_result`` e a flag ``zero``.
+
+#### 4. Memória (Memory):
+
+- A ``u_ram`` (memória de dados) recebe o ``alu_result`` como endereço.
+
+- Se ``memWrite`` estiver ativo, o dado de ``reg_data2`` é escrito na memória.
+
+- Caso contrário, o dado lido da memória é disponibilizado em ``mem_data_out``.
+
+#### 5. Escrita de Volta (Write-Back):
+
+- Um multiplexador final (descrito com ``with resultSrc select``) escolhe o dado que será escrito de volta, o ``write_data``, entre o ``alu_result``, ``mem_data_out`` ou ``pc_plus4``.
+
+- Este ``write_data`` é enviado para a porta ``wd`` da ``u_regs``. Se ``regWrite`` estiver ativo, o dado é armazenado no registrador de destino ``rd`` no próximo pulso de clock.
+
+___
