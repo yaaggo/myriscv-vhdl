@@ -1150,6 +1150,8 @@ O sinal de controle ``resultSrc``, gerado pelo ``controller``, comanda este mult
 ## Implementação Geral e Conclusão
 A entidade ``design`` é o componente de mais alto nível do projeto; ela é a "placa-mãe" que conecta todos os módulos especializados que foram detalhados anteriormente. Esta entidade não contém muita lógica própria; em vez disso, sua arquitetura é estrutural, definindo a fiação e o fluxo de dados e de controle que dão vida ao processador MyRISC-V.
 
+_(não vou botar o código pq é muito grande)_
+
 ### Sinais e Portas
 - **Portas de Entrada/Saída**: A entidade design possui apenas as portas essenciais ``clk`` e ``rst`` como entradas. Todas as suas saídas (``debug_*``) são dedicadas à depuração, permitindo que, durante a simulação, da para observar sinais críticos do processador a cada ciclo.
 
