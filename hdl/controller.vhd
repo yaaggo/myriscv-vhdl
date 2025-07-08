@@ -28,7 +28,6 @@ architecture behavior of controller is
     signal jump     : std_logic;                    -- sinal que indica uma instrucao de jump
     signal bne      : std_logic;                    -- sinal que indica uma instrucao 'branch on not equal'
     signal beq      : std_logic;                    -- sinal que indica uma instrucao 'branch on equal'
-    signal RtypeSub : std_logic;                    -- sinal para diferenciar entre add e sub no tipo-r
 
 begin
     -- logica concorrente para o sinal de controle do pc (PCSrc)
@@ -121,9 +120,11 @@ begin
     -- processo 2: fecodificador da ULA
     -- gera o sinal aluControl final com base no aluOp, funct3 e funct7
     aluDecoder: process (op, funct3, funct7, aluOp)
+    	-- declaracao como variavel porque como signal ele nao atualiza a tempo
+    	variable RtypeSub : std_logic;
     begin
         -- logica para detectar a instrucao sub do tipo-r
-        RtypeSub <= funct7(5) and op(5);
+        RtypeSub := funct7(5) and op(5);
 
         case aluOp is
             -- caso 1: adicao para lw, sw, jalr

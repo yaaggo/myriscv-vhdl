@@ -31,10 +31,10 @@ begin
         case aluControl is
             -- adicao
             when "000" => 
-                res_s <= std_logic_vector(unsigned(a) + unsigned(b));
+                res_s <= std_logic_vector(signed(a) + signed(b));
             -- subtracao
             when "001" =>
-                res_s <= std_logic_vector(unsigned(a) - unsigned(b));
+                res_s <= std_logic_vector(signed(a) - signed(b));
             -- operacao logica and bit a bit
             when "010" =>
                 res_s <= a and b;
